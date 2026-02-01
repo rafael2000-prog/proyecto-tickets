@@ -59,18 +59,31 @@ async def reservar_inicial(asiento_id: int):
 
 @app.post("/finalizar-pago/{asiento_id}")
 async def finalizar_pago(asiento_id: int):
+    pago_key = f"pago:{asiento_id}"
+
+    # Intentamos marcar el pago como "en proceso" de forma atómica para evitar dobles cobros
+    marcado = await redis_client.setnx(pago_key, "en_proceso")
+    if not marcado:
+        return {"status": "error", "mensaje": "Pago ya en proceso o ya realizado"}
+
+    # Expiramos la marca por si algo sale muy mal (evita bloqueos infinitos)
+    await redis_client.expire(pago_key, 3600)
+
     async with httpx.AsyncClient() as client:
         # --- PASO 1: PAGO (Si falla, el cliente no paga, así que nos detenemos) ---
         try:
             res_pago = await client.post(f"{PAGOS_URL}/procesar", timeout=3.0)
             data_pago = res_pago.json()
-            
+
             # Verificamos que el código sea 200 O que el status diga success
             if res_pago.status_code != 200 or data_pago.get("status") != "success":
+                # Liberamos la marca para permitir reintentos
+                await redis_client.delete(pago_key)
                 return {"status": "error", "mensaje": "Pago rechazado por el banco"}
-                
-            # Si llega aquí, el pago es exitoso... sigue el flujo
+
         except Exception as e:
+            # Liberamos la marca para permitir reintentos
+            await redis_client.delete(pago_key)
             return {"status": "error", "mensaje": f"Error de conexión con pagos: {str(e)}"}
 
         # --- PASO 2: NOTIFICACIÓN (Si falla, NO nos detenemos) ---
@@ -83,33 +96,30 @@ async def finalizar_pago(asiento_id: int):
             notif_ok = False # Toleramos el fallo
 
         # --- PASO 3: INVENTARIO (Uso de Cola para Resiliencia) ---
+        # Incluimos la bandera `notificado` para que el worker pueda marcar en DB si ya se envió correo
+        evento = {"asiento_id": asiento_id, "accion": "vender", "retries": 0, "notificado": notif_ok}
+        mensaje = json.dumps(evento)
+
+        fallback_used = False
         try:
-            evento = {"asiento_id": asiento_id, "accion": "vender"}
-            # Convertimos a JSON string
-            mensaje = json.dumps(evento)
-            
-            # IMPORTANTE: Usa await porque redis_client es asíncrono
             await redis_client.rpush("cola_inventario", mensaje)
-            
             print(f"🔥 ÉXITO: Mensaje enviado a Redis para asiento {asiento_id}")
-            
         except Exception as e:
             print(f"❌ ERROR CRÍTICO REDIS: {e}")
-            # Solo si Redis falla de verdad, intentamos el plan B
-            # (Pero en la demo Redis debería estar siempre ON)
-    
-        try:
-            res_pago = await client.post(f"{PAGOS_URL}/procesar", timeout=5.0)
-            
-            # Verificamos si la respuesta está vacía o es un error de servidor
-            if res_pago.status_code != 200:
-                return {"status": "error", "mensaje": "El servicio de pagos devolvió un error técnico"}
-            
-            data_pago = res_pago.json() # Ahora es seguro convertir
-            
-            if data_pago.get("status") != "success":
-                return {"status": "error", "mensaje": "Pago rechazado por el banco"}
+            # Fallback local (archivo) para resiliencia cuando Redis no está disponible
+            try:
+                with open("outbox_fallback.jsonl", "a", encoding="utf-8") as f:
+                    f.write(mensaje + "\n")
+                fallback_used = True
+                print(f"💾 Fallback: mensaje escrito en outbox_fallback.jsonl para asiento {asiento_id}")
+            except Exception as e2:
+                # Si ni siquiera el fallback local funciona, liberamos la marca de pago para permitir reintentos
+                await redis_client.delete(pago_key)
+                return {"status": "error", "mensaje": "Fallo crítico: no se pudo encolar ni escribir fallback"}
 
-        except Exception as e:
-            print(f"Error de conexión o formato: {e}")
-            return {"status": "error", "mensaje": "No se pudo procesar el pago (Servicio Offline o Error de JSON)"}
+        # Marcamos pago definitivamente realizado (evitamos que otro intento cobre de nuevo)
+        await redis_client.set(pago_key, "realizado")
+        await redis_client.expire(pago_key, 86400)  # 24 horas
+
+        # Confirmación final al cliente
+        return {"status": "success", "mensaje": "Pago procesado", "notificado": notif_ok, "fallback": fallback_used}

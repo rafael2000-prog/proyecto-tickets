@@ -122,6 +122,12 @@
                         card.className = "p-3 rounded-lg border border-green-900 bg-green-900/20 text-center";
                         txt.innerText = "● ONLINE";
                         txt.className = "health-status text-sm font-bold text-green-400";
+
+                        // Si el inventario está ONLINE, ocultamos el botón de pago de contingencia
+                        if (service === 'inventario') {
+                            document.getElementById('pago-emergencia').innerHTML = '';
+                        }
+
                     } else {
                         card.className = "p-3 rounded-lg border border-red-900 bg-red-900/20 text-center";
                         txt.innerText = "○ OFFLINE";
@@ -173,8 +179,17 @@
                 if(data.status === "bloqueado") {
                     log.innerText = `ASIENTO ${id} BLOQUEADO EN CACHÉ`;
 
-                    // Llamamos a la función global
-                    window.inyectarBotonPagoEmergencia(id);
+                    // Solo mostramos el botón de emergencia si el inventario está OFFLINE
+                    try {
+                        const healthRes = await fetch('/healthcheck');
+                        const health = await healthRes.json();
+                        if (health.inventario === "OFFLINE") {
+                            window.inyectarBotonPagoEmergencia(id);
+                        }
+                    } catch (e) {
+                        // Si no podemos consultar el healthcheck asumimos contingencia
+                        window.inyectarBotonPagoEmergencia(id);
+                    }
 
                     // Cambiamos de pestaña
                     showSection('section-pagos');
@@ -268,10 +283,12 @@
 
         async function confirmarVenta(id) {
             const log = document.getElementById('log-msg');
+            // Ocultamos el botón inmediatamente para evitar dobles clics
+            document.getElementById('pago-emergencia').innerHTML = "";
             try {
                 log.innerText = "PROCESANDO...";
                 const res = await fetch(`http://localhost:8000/finalizar-pago/${id}`, { method: 'POST' });
-                
+
                 // Verificamos si la respuesta fue exitosa antes de procesar el JSON
                 if (!res.ok) {
                     const errorTexto = await res.text();
@@ -283,10 +300,9 @@
                 const data = await res.json();
                 console.log("Datos recibidos:", data);
 
-                // Verificamos que 'data' exista antes de leer .status
-                if (data && data.status === "completado") {
+                // Aceptamos ahora el status 'success' devolviendo el backend
+                if (data && data.status === "success") {
                     log.innerText = "✅ ENCOLADO CORRECTAMENTE";
-                    document.getElementById('pago-emergencia').innerHTML = ""; 
                     alert("Pago en proceso de sincronización.");
                     showSection('section-reserva');
                 } else {
