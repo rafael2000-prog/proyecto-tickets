@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Ticket Master - Chaos Control</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white font-sans p-6">
+
+    <div class="max-w-4xl mx-auto">
+        <h1 class="text-3xl font-black text-center mb-2 text-blue-500">TICKET-CORE SYSTEM</h1>
+        <p class="text-center text-gray-400 mb-8 text-sm uppercase tracking-widest">Panel de Control de Microservicios</p>
+
+        <div class="grid grid-cols-4 gap-4 mb-10">
+            <div id="health-8000" class="p-3 rounded-lg border border-gray-700 bg-gray-800 text-center">
+                <p class="text-[10px] text-gray-500 font-bold uppercase">Reservas (8000)</p>
+                <p class="health-status text-sm font-bold text-gray-600">CHECKING...</p>
+            </div>
+            <div id="health-8001" class="p-3 rounded-lg border border-gray-700 bg-gray-800 text-center">
+                <p class="text-[10px] text-gray-500 font-bold uppercase">Inventario (8001)</p>
+                <p class="health-status text-sm font-bold text-gray-600">CHECKING...</p>
+            </div>
+            <div id="health-8002" class="p-3 rounded-lg border border-gray-700 bg-gray-800 text-center">
+                <p class="text-[10px] text-gray-500 font-bold uppercase">Pagos (8002)</p>
+                <p class="health-status text-sm font-bold text-gray-600">CHECKING...</p>
+            </div>
+            <div id="health-8003" class="p-3 rounded-lg border border-gray-700 bg-gray-800 text-center">
+                <p class="text-[10px] text-gray-500 font-bold uppercase">Emails (8003)</p>
+                <p class="health-status text-sm font-bold text-gray-600">CHECKING...</p>
+            </div>
+        </div>
+
+        <div class="flex justify-center gap-4 mb-10">
+            <button onclick="showSection('section-reserva')" class="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg font-bold shadow-lg transition-all active:scale-95">
+                 Reservas
+            </button>
+            <button onclick="showSection('section-inventario')" class="bg-green-600 hover:bg-green-700 px-6 py-3 rounded-lg font-bold shadow-lg transition-all active:scale-95">
+                 Inventario
+            </button>
+            <button onclick="showSection('section-pagos')" class="bg-amber-600 hover:bg-amber-700 px-6 py-3 rounded-lg font-bold shadow-lg transition-all active:scale-95">
+                 Pagos
+            </button>
+        </div>
+
+        <div class="bg-gray-800 rounded-2xl border border-gray-700 shadow-2xl overflow-hidden">
+            
+            <div id="section-reserva" class="section-content p-8">
+                <h2 class="text-xl font-bold mb-6 text-blue-400">Mapa de Asientos</h2>
+                <div id="grid-asientos" class="grid grid-cols-5 gap-3"></div>
+            </div>
+
+            <div id="section-inventario" class="section-content hidden p-8 text-center">
+                <h2 class="text-xl font-bold mb-8 text-green-400">Estado Real del Inventario</h2>
+                <div class="grid grid-cols-3 gap-6">
+                    <div class="p-6 bg-gray-900 rounded-xl border-b-4 border-green-500">
+                        <p class="text-xs text-gray-500 mb-1">LIBRES</p>
+                        <p id="inv-libres" class="text-4xl font-black text-green-500">0</p>
+                    </div>
+                    <div class="p-6 bg-gray-900 rounded-xl border-b-4 border-amber-500">
+                        <p class="text-xs text-gray-500 mb-1">BLOQUEADOS</p>
+                        <p id="inv-pendientes" class="text-4xl font-black text-amber-500">0</p>
+                    </div>
+                    <div class="p-6 bg-gray-900 rounded-xl border-b-4 border-red-500">
+                        <p class="text-xs text-gray-500 mb-1">VENDIDOS</p>
+                        <p id="inv-ocupados" class="text-4xl font-black text-red-500">0</p>
+                    </div>
+                </div>
+                <div class="mt-8 overflow-x-auto">
+                    <table class="w-full text-left text-sm border-collapse">
+                        <thead>
+                            <tr class="border-b border-gray-700 text-gray-400">
+                                <th class="py-2">Asiento</th>
+                                <th class="py-2">Estado</th>
+                                <th class="py-2">Pago</th>
+                                <th class="py-2">Notificado</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tabla-detalle-cuerpo">
+                            </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="section-pagos" class="section-content hidden p-8">
+                <h2 class="text-xl font-bold mb-6 text-amber-400">Control de Cobros Pendientes</h2>
+                
+                <div id="pago-emergencia" class="mb-4"></div> 
+                
+                <div id="lista-pagos" class="space-y-3"></div>
+            </div>
+        </div>
+
+        <div class="mt-8 p-4 bg-black/50 rounded-lg font-mono text-[10px] text-gray-500 border border-gray-800">
+            <p>> STATUS: <span id="log-msg" class="text-blue-400 font-bold uppercase">Listo para operar</span></p>
+        </div>
+    </div>
+
+    <script>
+        // --- NAVEGACIÓN ---
+        function showSection(id) {
+            document.querySelectorAll('.section-content').forEach(s => s.classList.add('hidden'));
+            document.getElementById(id).classList.remove('hidden');
+            // Forzamos actualización al cambiar de pestaña
+            actualizarInventario();
+            cargarPagosPendientes();
+        }
+
+        // --- HEALTH CHECK ---
+        async function checkHealth() {
+            try {
+                const res = await fetch('/healthcheck');
+                const data = await res.json();
+                const ports = { reservas: '8000', inventario: '8001', pagos: '8002', notificaciones: '8003' };
+                
+                for (let service in data) {
+                    const status = data[service];
+                    const card = document.getElementById('health-' + ports[service]);
+                    if (!card) continue;
+                    const txt = card.querySelector('.health-status');
+                    
+                    if (status === "ONLINE") {
+                        card.className = "p-3 rounded-lg border border-green-900 bg-green-900/20 text-center";
+                        txt.innerText = "● ONLINE";
+                        txt.className = "health-status text-sm font-bold text-green-400";
+                    } else {
+                        card.className = "p-3 rounded-lg border border-red-900 bg-red-900/20 text-center";
+                        txt.innerText = "○ OFFLINE";
+                        txt.className = "health-status text-sm font-bold text-red-500 animate-pulse";
+                    }
+                }
+            } catch (e) { console.warn("Healthcheck inaccesible"); }
+        }
+
+        // --- GENERACIÓN DEL MAPA ---
+        const grid = document.getElementById('grid-asientos');
+        grid.innerHTML = ""; // Limpiar antes de generar
+        for(let i=1; i<=20; i++) {
+            grid.innerHTML += `<button id="seat-${i}" onclick="intentarReserva(${i})" class="bg-gray-700 hover:bg-blue-600 p-3 rounded font-bold transition active:scale-90 text-xs text-white">Seat ${i}</button>`;
+        }
+
+        // --- LÓGICA DE NEGOCIO ---
+       // --- FUNCIONES GLOBALES ---
+
+        // Forzamos que sea global asignándola a window
+        window.inyectarBotonPagoEmergencia = function(id) {
+            console.log("Intentando inyectar botón para asiento: " + id);
+            const divEmergencia = document.getElementById('pago-emergencia');
+            
+            if (divEmergencia) {
+                divEmergencia.innerHTML = `
+                    <div class="p-4 bg-blue-900/40 border-2 border-blue-500 rounded-lg shadow-lg animate-pulse mb-4">
+                        <p class="text-white font-bold text-center uppercase text-xs">💸 Pago de Contingencia Activado</p>
+                        <p class="text-blue-300 text-[10px] text-center mb-3">Asiento #${id} (Estado: Reservado en Redis)</p>
+                        <button onclick="confirmarVenta(${id})" class="w-full bg-green-600 hover:bg-green-500 text-white font-black py-3 rounded shadow-md transition-all uppercase text-sm">
+                            Confirmar Pago Asiento #${id}
+                        </button>
+                    </div>
+                `;
+                console.log("Inyección exitosa.");
+            } else {
+                console.error("No se encontró el contenedor pago-emergencia");
+            }
+        };
+
+        // --- LÓGICA DE RESERVA ---
+        async function intentarReserva(id) {
+            const log = document.getElementById('log-msg');
+            try {
+                log.innerText = "COMUNICANDO CON RESERVAS (8000)...";
+                const res = await fetch(`http://localhost:8000/comprar/${id}`, { method: 'POST' });
+                const data = await res.json();
+                
+                if(data.status === "bloqueado") {
+                    log.innerText = `ASIENTO ${id} BLOQUEADO EN CACHÉ`;
+
+                    // Llamamos a la función global
+                    window.inyectarBotonPagoEmergencia(id);
+
+                    // Cambiamos de pestaña
+                    showSection('section-pagos');
+                } else {
+                    alert("Error: " + (data.error || "No disponible"));
+                }
+            } catch (e) { 
+                log.innerText = "ERROR: EL SERVICIO 8000 NO RESPONDE";
+                console.error("Fallo de conexión:", e);
+            }
+        }
+
+        async function actualizarInventario() {
+            try {
+                const res = await fetch('http://localhost:8001/detalle-completo');
+                if (!res.ok) throw new Error("Servicio 8001 Offline"); // Si no responde, saltamos al catch
+                
+                const detalles = await res.json();
+                
+                let l = 0, p = 0, o = 0;
+                const cuerpo = document.getElementById('tabla-detalle-cuerpo');
+                cuerpo.innerHTML = "";
+
+                detalles.forEach(item => {
+                    // Contadores
+                    if (item.estado === "disponible") l++;
+                    else if (item.estado === "bloqueado") p++;
+                    else if (item.estado === "vendido") o++;
+
+                    // Actualizar color en el mapa
+                    const btn = document.getElementById(`seat-${item.asiento_id}`);
+                    if(btn) {
+                        btn.className = "p-3 rounded font-bold transition text-xs text-white " + 
+                            (item.estado === 'disponible' ? 'bg-gray-700 hover:bg-blue-600' : 
+                            item.estado === 'bloqueado' ? 'bg-amber-600' : 'bg-red-700 cursor-not-allowed');
+                    }
+
+                    // Fila de tabla
+                    const iconNotif = item.notificado ? "✅" : "❌";
+                    cuerpo.innerHTML += `
+                        <tr class="border-b border-gray-800">
+                            <td class="py-2">#${item.asiento_id}</td>
+                            <td class="py-2 uppercase text-[10px]">${item.estado}</td>
+                            <td class="py-2 italic text-gray-400">${item.pago}</td>
+                            <td class="py-2 text-center">${iconNotif}</td>
+                        </tr>`;
+                });
+
+                document.getElementById('inv-libres').innerText = l;
+                document.getElementById('inv-pendientes').innerText = p;
+                document.getElementById('inv-ocupados').innerText = o;
+            } catch (e) { 
+                console.warn("Modo Resiliencia: El inventario no responde, pero el sistema sigue operativo.");
+                document.getElementById('log-msg').innerText = "AVISO: Modo de contingencia (Inventario Offline)";
+            }
+        }
+
+        async function cargarPagosPendientes() {
+            const lista = document.getElementById('lista-pagos');
+            try {
+                const res = await fetch('http://localhost:8001/detalle-completo');
+                if (!res.ok) throw new Error("Offline"); // Forzar el catch si el servicio no responde bien
+                
+                const detalles = await res.json();
+                lista.innerHTML = "";
+                let hay = false;
+
+                detalles.forEach(item => {
+                    if (item.estado === "bloqueado") {
+                        hay = true;
+                        lista.innerHTML += `
+                            <div class="flex justify-between items-center p-4 bg-gray-900 rounded-lg border-l-4 border-amber-500 mb-2">
+                                <div>
+                                    <span class="block font-bold">Asiento #${item.asiento_id}</span>
+                                    <span class="text-[10px] text-amber-500 uppercase">Esperando Pago</span>
+                                </div>
+                                <div class="flex gap-2">
+                                    <button onclick="confirmarVenta(${item.asiento_id})" class="bg-green-600 hover:bg-green-700 text-[10px] px-3 py-2 rounded font-bold uppercase">Confirmar</button>
+                                    <button onclick="liberarAsiento(${item.asiento_id})" class="bg-red-600 hover:bg-red-700 text-[10px] px-3 py-2 rounded font-bold uppercase">Liberar</button>
+                                </div>
+                            </div>`;
+                    }
+                });
+                if(!hay) lista.innerHTML = "<p class='text-gray-500 italic text-center text-sm py-4'>No hay asientos bloqueados.</p>";
+            } catch (e) { 
+                // --- ESTO EVITA QUE EL BOTÓN DE PAGO SE TRABE ---
+                console.warn("No se pueden cargar pagos pendientes porque el Inventario está offline.");
+                lista.innerHTML = "<p class='text-amber-500 italic text-center text-sm py-4'>Servicio de inventario no disponible (Modo Contingencia).</p>";
+            }
+        }
+
+        async function confirmarVenta(id) {
+            const log = document.getElementById('log-msg');
+            try {
+                log.innerText = "PROCESANDO...";
+                const res = await fetch(`http://localhost:8000/finalizar-pago/${id}`, { method: 'POST' });
+                
+                // Verificamos si la respuesta fue exitosa antes de procesar el JSON
+                if (!res.ok) {
+                    const errorTexto = await res.text();
+                    console.error("Error del servidor:", errorTexto);
+                    log.innerText = "❌ Error en servidor 8000";
+                    return;
+                }
+
+                const data = await res.json();
+                console.log("Datos recibidos:", data);
+
+                // Verificamos que 'data' exista antes de leer .status
+                if (data && data.status === "completado") {
+                    log.innerText = "✅ ENCOLADO CORRECTAMENTE";
+                    document.getElementById('pago-emergencia').innerHTML = ""; 
+                    alert("Pago en proceso de sincronización.");
+                    showSection('section-reserva');
+                } else {
+                    log.innerText = "⚠️ Respuesta inesperada";
+                }
+            } catch (e) {
+                console.error("Error en el fetch:", e);
+                log.innerText = "❌ Error de conexión";
+            }
+        }
+
+        async function liberarAsiento(id) {
+            try {
+                await fetch(`http://localhost:8001/liberar/${id}`, { method: 'POST' });
+                document.getElementById('log-msg').innerText = `Asiento #${id} liberado.`;
+                await actualizarInventario();
+                await cargarPagosPendientes();
+            } catch (e) {
+                console.error("Error al liberar:", e);
+            }
+        }
+
+        // --- LOOPS DE TIEMPO REAL ---
+        setInterval(checkHealth, 2000); // Más rápido para que se vea el cambio de ON/OFF
+
+        setInterval(() => {
+            // Actualizamos el inventario siempre para que el mapa de asientos refleje cambios
+            actualizarInventario();
+            
+            // Si estamos en la pestaña de pagos, actualizamos la lista
+            if(!document.getElementById('section-pagos').classList.contains('hidden')) {
+                cargarPagosPendientes();
+            }
+        }, 3000); 
+
+        // Inicio
+        checkHealth();
+        actualizarInventario();
+
+    </script>
+</body>
+</html>

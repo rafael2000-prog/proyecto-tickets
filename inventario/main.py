@@ -1,25 +1,147 @@
 from fastapi import FastAPI, HTTPException
-import asyncio
+from fastapi.middleware.cors import CORSMiddleware
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 app = FastAPI()
 
-# Simulación de DB de asientos: {asiento_id: estado}
-# Estados: "disponible", "bloqueado", "vendido"
-inventario = {i: "disponible" for i in range(1, 11)}
+# Importante para que el dashboard pueda leer los datos sin bloqueos
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-@app.post("/bloquear/{asiento_id}")
-async def bloquear_asiento(asiento_id: int):
-    # Lógica para evitar la Condición de Carrera
-    if asiento_id not in inventario:
-        raise HTTPException(status_code=404, detail="Asiento no existe")
-    
-    if inventario[asiento_id] != "disponible":
-        raise HTTPException(status_code=400, detail="Asiento ya ocupado o reservado")
-    
-    # Bloqueo atómico (simulado)
-    inventario[asiento_id] = "bloqueado"
-    return {"status": "reservado_temporalmente", "asiento": asiento_id}
+def get_db_connection():
+    # Asegúrate de poner tu contraseña real aquí
+    return psycopg2.connect(
+        host="localhost", 
+        database="ticket_system", 
+        user="postgres", 
+        password="Rafa1234",
+        cursor_factory=RealDictCursor
+    )
 
 @app.get("/estado")
 def ver_inventario():
-    return inventario
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, estado FROM asientos ORDER BY id;")
+    rows = cur.fetchall()
+    # Retorna { "1": "disponible", "2": "vendido" ... }
+    res = {str(row['id']): row['estado'] for row in rows}
+    cur.close()
+    conn.close()
+    return res
+
+@app.get("/detalle-completo")
+def obtener_detalle_completo():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    query = """
+        SELECT a.id as asiento_id, a.estado, 
+               COALESCE(r.estado_pago, 'n/a') as pago, 
+               COALESCE(r.notificado, FALSE) as notificado
+        FROM asientos a
+        LEFT JOIN reservas r ON a.id = r.asiento_id
+        ORDER BY a.id ASC;
+    """
+    cur.execute(query)
+    detalles = cur.fetchall()
+    cur.close()
+    conn.close()
+    return detalles
+
+@app.post("/bloquear/{asiento_id}")
+async def bloquear_asiento(asiento_id: int):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # Bloqueo atómico en base de datos
+        cur.execute("""
+            UPDATE asientos SET estado = 'bloqueado' 
+            WHERE id = %s AND estado = 'disponible' RETURNING id;
+        """, (asiento_id,))
+        
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=400, detail="Asiento ocupado o inexistente")
+
+        # Crear registro de reserva inicial
+        cur.execute("""
+            INSERT INTO reservas (asiento_id, cliente_email, estado_pago, notificado)
+            VALUES (%s, 'cliente@ejemplo.com', 'pendiente', FALSE);
+        """, (asiento_id,))
+        
+        conn.commit()
+        return {"status": "reservado_temporalmente", "asiento": asiento_id}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cur.close()
+        conn.close()
+
+@app.post("/confirmar-final/{asiento_id}")
+async def confirmar_final(asiento_id: int, notificado: str = "false"):
+    # Convertimos el texto a booleano real
+    fue_notificado = notificado.lower() in ["true", "1", "yes"]
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # 1. Marcar como vendido
+        cur.execute("UPDATE asientos SET estado = 'vendido' WHERE id = %s", (asiento_id,))
+        
+        # 2. Actualizar la reserva (aseguramos que notificado sea booleano)
+        cur.execute("""
+            UPDATE reservas 
+            SET estado_pago = 'completado', notificado = %s 
+            WHERE asiento_id = %s
+        """, (fue_notificado, asiento_id))
+        
+        conn.commit()
+        return {"status": "actualizado", "db_notificado": fue_notificado}
+    except Exception as e:
+        conn.rollback()
+        print(f"Error SQL: {e}")
+        return {"status": "error", "msg": str(e)}
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.post("/reset-db")
+async def reset_db():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM reservas;")
+        cur.execute("UPDATE asientos SET estado = 'disponible';")
+        conn.commit()
+        return {"status": "Base de datos limpia"}
+    except Exception as e:
+        conn.rollback()
+        return {"status": "error", "details": str(e)}
+    finally:
+        cur.close()
+        conn.close()
+
+@app.post("/liberar/{asiento_id}")
+async def liberar_asiento(asiento_id: int):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        # Volvemos el asiento a disponible
+        cur.execute("UPDATE asientos SET estado = 'disponible' WHERE id = %s;", (asiento_id,))
+        # Borramos la reserva pendiente
+        cur.execute("DELETE FROM reservas WHERE asiento_id = %s AND estado_pago = 'pendiente';", (asiento_id,))
+        conn.commit()
+        return {"status": "liberado"}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cur.close()
+        conn.close()
