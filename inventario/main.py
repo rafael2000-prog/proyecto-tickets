@@ -2,6 +2,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import psycopg2
 from psycopg2.extras import RealDictCursor
+import redis
+import time # Importamos time para simular la traba
 
 app = FastAPI()
 
@@ -88,6 +90,17 @@ def obtener_detalle_completo():
 
 @app.post("/bloquear/{asiento_id}")
 async def bloquear_asiento(asiento_id: int):
+    
+    # --- CHAOS MONKEY: INVENTARIO FANTASMA ---
+    # Si esta bandera está activa, simulamos que el servicio no responde (Crash/Hang)
+    if r.get("chaos:inventario:fail") == "true":
+        print(f"CHAOS: Simulando Inventario Fantasma para asiento {asiento_id}")
+        # Opción A: Dormir más de 0.5s para causar timeout en Reservas
+        time.sleep(2.0) 
+        # Opción B: Lanzar error 503 Service Unavailable
+        raise HTTPException(status_code=503, detail="Inventario caído (Simulado)")
+    # -----------------------------------------
+
     conn = get_db_connection()
     cur = conn.cursor()
     try:
