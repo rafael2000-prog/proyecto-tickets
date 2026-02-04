@@ -40,7 +40,7 @@ async def reservar_inicial(asiento_id: int):
     exito_bloqueo = await redis_client.setnx(clave_bloqueo, "bloqueado")
     
     if exito_bloqueo:
-        # Ponemos un tiempo de vida (ej. 2 minutos) por si el usuario nunca paga
+        # Ponemos un tiempo de vida por si el usuario nunca paga
         await redis_client.expire(clave_bloqueo, 120)
         
         # 2. Intentamos avisar al inventario (POSTGRES) - SEGUNDO PLANO
