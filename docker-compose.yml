@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  # Base de datos PostgreSQL
+  db:
+    image: postgres:15-alpine
+    container_name: postgres-tickets
+    ports:
+      - "5432:5432"  # Expone el puerto estándar
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=Rafa1234      # Contraseña extraída de tu main.py
+      - POSTGRES_DB=ticket_system       # Nombre de DB extraído de tu main.py
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql # Carga automática de tablas
+    networks:
+      - ticket-network
+
+  # Redis para colas y caché
+  redis:
+    image: redis:latest
+    container_name: redis-tickets
+    ports:
+      - "6379:6379"  # ¡IMPORTANTE! Esto expone el puerto para que tu worker.py conecte
+    networks:
+      - ticket-network
+
+networks:
+  ticket-network:
+    driver: bridge
